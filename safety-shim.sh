@@ -12,7 +12,11 @@
 # Three enforcement layers:
 #   1. Hard-coded sensitive/destructive patterns (zero deps, instant)
 #   2. JSONL deny rules from active.jsonl + pending.jsonl
-#   3. Skill onboarding gate (blocks unonboarded skills)
+#   3. Default-deny: skill gate + infrastructure allowlist
+#      - Known skill + onboarded → allow (subject to deny rules)
+#      - Known skill + not onboarded → block with instructions
+#      - Not a skill + on allowlist → allow (infrastructure commands)
+#      - Not a skill + not on allowlist → BLOCK
 #
 # Logs all exec calls to $OC_DIR/safety-audit.log.
 # Everything else passes through to /bin/bash.
@@ -27,6 +31,7 @@ AUDIT="$OC_DIR/safety-audit.log"
 ACTIVE_RULES="$RULES_DIR/active.jsonl"
 PENDING_RULES="$RULES_DIR/pending.jsonl"
 SKILLS_REG="$RULES_DIR/skills.json"
+ALLOWLIST="$RULES_DIR/allowlist.jsonl"
 ONBOARD_PROMPT="$OC_DIR/prompts/onboard.md"
 
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -37,6 +42,7 @@ mkdir -p "$RULES_DIR" "$OC_DIR/prompts" "$(dirname "$AUDIT")"
 [ -f "$SKILLS_REG" ]    || echo '{}' > "$SKILLS_REG"
 [ -f "$ACTIVE_RULES" ]  || touch "$ACTIVE_RULES"
 [ -f "$PENDING_RULES" ] || touch "$PENDING_RULES"
+[ -f "$ALLOWLIST" ]     || touch "$ALLOWLIST"
 
 # ── Logging ────────────────────────────────────────────────────────────
 log() { echo "$TIMESTAMP | $1 | $CMD" >> "$AUDIT"; }
@@ -168,28 +174,16 @@ check_jsonl_rules "$ACTIVE_RULES"  "active"  "high"
 check_jsonl_rules "$PENDING_RULES" "pending" "critical"
 
 # ═══════════════════════════════════════════════════════════════════════
-# LAYER 3: Skill onboarding gate
+# LAYER 3: Default-deny with skill gate + infrastructure allowlist
 # ═══════════════════════════════════════════════════════════════════════
 #
-# Skill detection is DATA-DRIVEN from skills.json, not hardcoded.
+# Model: DENY BY DEFAULT. A command is only allowed if:
+#   (a) It matches a registered, onboarded skill, OR
+#   (b) It matches the infrastructure allowlist (safe shell commands)
 #
-# skills.json format:
-# {
-#   "gog-secure": {
-#     "detect": ["gmail", "calendar", "google.mail", "events.list", ...],
-#     "onboarded": "2026-03-10T14:22:00Z",
-#     "status": "active",
-#     "capabilities": ["email", "calendar"]
-#   }
-# }
-#
-# To add a new skill's detection patterns, use claw-clips:
-#   claw-clips skills add myskill --detect "pattern1,pattern2,..."
-#
-# Unonboarded skills have no entry at all. The shim scans all
-# registered skill detect patterns; if none match, the command
-# passes through (it's a regular bash command, not a skill call).
-# If one DOES match but the skill isn't marked onboarded, we block.
+# Skill detection is DATA-DRIVEN from skills.json detect patterns.
+# The allowlist covers basic shell commands the agent needs to function.
+# Everything else is BLOCKED.
 # ═══════════════════════════════════════════════════════════════════════
 
 detect_skill() {
@@ -198,7 +192,6 @@ detect_skill() {
   local cmd_lower
   cmd_lower=$(echo "$CMD" | tr '[:upper:]' '[:lower:]')
 
-  # Iterate registered skills and their detect patterns
   local skill_names
   skill_names=$(jq -r 'keys[]' "$SKILLS_REG" 2>/dev/null) || return
 
@@ -214,76 +207,68 @@ detect_skill() {
       fi
     done
   done
+}
 
-  # ── Catch-all: unregistered skill keywords ────────────────────────
-  # If the command contains known API-like patterns but NO registered
-  # skill matched, treat it as an unknown skill that needs onboarding.
-  # This list is intentionally broad — better to gate than to miss.
-  local CATCH_ALL=(
-    "gmail" "calendar" "drive" "sheets" "docs" "slack"
-    "asana" "jira" "github" "notion" "discord" "trello"
-    "messages.list" "messages.send" "messages.delete"
-    "events.list" "events.insert" "events.delete"
-    "files.list" "files.create" "files.delete"
-  )
-  for pat in "${CATCH_ALL[@]}"; do
-    if [[ "$cmd_lower" == *"$pat"* ]]; then
-      echo "__unknown__:$pat"
-      return
+check_allowlist() {
+  # Check if command matches any pattern in the infrastructure allowlist.
+  # Returns 0 (true) if allowed, 1 (false) if not.
+  [ -f "$ALLOWLIST" ] || return 1
+  [ -s "$ALLOWLIST" ] || return 1
+
+  # The allowlist is checked against the ARGUMENTS to -c, not the raw CMD.
+  # CMD="$*" includes "-c <actual_command>", so strip the "-c " prefix.
+  local check_cmd="$CMD"
+  if [[ "$check_cmd" == -c\ * ]]; then
+    check_cmd="${check_cmd#-c }"
+  fi
+
+  while IFS= read -r rule; do
+    [ -z "$rule" ] && continue
+    [[ "$rule" == \#* ]] && continue
+
+    local pattern ptype
+    if command -v jq > /dev/null 2>&1; then
+      pattern=$(echo "$rule" | jq -r '.pattern // empty' 2>/dev/null) || continue
+      ptype=$(echo "$rule" | jq -r '.type // "regex"' 2>/dev/null)
+    else
+      # Fallback: try to extract pattern with grep if jq unavailable
+      continue
     fi
-  done
+
+    [ -n "$pattern" ] || continue
+
+    case "$ptype" in
+      exact)    [[ "$check_cmd" == "$pattern" ]] && return 0 ;;
+      contains) echo "$check_cmd" | grep -qi "$pattern" && return 0 ;;
+      regex)    echo "$check_cmd" | grep -qE "$pattern" && return 0 ;;
+    esac
+  done < "$ALLOWLIST"
+
+  return 1
 }
 
 DETECTED=$(detect_skill)
 
 if [ -n "$DETECTED" ]; then
-  if [[ "$DETECTED" == __unknown__:* ]]; then
-    # Matched a catch-all but no registered skill — block
-    matched_pat="${DETECTED#__unknown__:}"
-    log "BLOCKED_UNKNOWN_SKILL matched=$matched_pat"
-    cat >&2 << 'EOF'
-[safety] ═══════════════════════════════════════════════════════════════
-[safety] BLOCKED: This command matches a known API/skill pattern but
-[safety] no registered skill was found for it.
-[safety]
-[safety] Before using any new tool integration, you must:
-[safety]
-[safety]   1. Register the skill with detection patterns:
-[safety]      Run: claw-clips skills add <skill_name> --detect "pattern1,pattern2"
-[safety]
-[safety]   2. Analyze the skill for safety risks by reading the onboarding
-[safety]      prompt at: ~/.openclaw/prompts/onboard.md
-[safety]      Generate JSONL deny rules and append them (one per line) to:
-[safety]      ~/.openclaw/rules/pending.jsonl
-[safety]
-[safety]   3. Complete onboarding:
-[safety]      Run: claw-clips skills onboard <skill_name>
-[safety]
-[safety] This is a ONE-TIME process per skill. After onboarding, all
-[safety] commands for this skill will be allowed (subject to deny rules).
-[safety] ═══════════════════════════════════════════════════════════════
-EOF
-    exit 1
+  # ── Command matches a registered skill ────────────────────────────
+  skill_status=$(jq -r --arg s "$DETECTED" \
+    '.[$s].status // "unregistered"' "$SKILLS_REG" 2>/dev/null)
 
-  else
-    # Known skill — check onboarded status
-    skill_status=$(jq -r --arg s "$DETECTED" \
-      '.[$s].status // "unregistered"' "$SKILLS_REG" 2>/dev/null)
-
-    case "$skill_status" in
-      active|probation)
-        # Onboarded — proceed (rules already checked in Layer 2)
-        ;;
-      disabled)
-        log "BLOCKED_DISABLED_SKILL skill=$DETECTED"
-        echo "[safety] BLOCKED: Skill '$DETECTED' is disabled." >&2
-        exit 1
-        ;;
-      *)
-        # Registered but not onboarded
-        log "BLOCKED_NOT_ONBOARDED skill=$DETECTED"
-        cat >&2 << EOF
-[safety] ═══════════════════════════════════════════════════════════════
+  case "$skill_status" in
+    active|probation)
+      # Onboarded — allow (deny rules already checked in Layer 2)
+      log "ALLOWED skill=$DETECTED"
+      exec /bin/bash "$@"
+      ;;
+    disabled)
+      log "BLOCKED_DISABLED_SKILL skill=$DETECTED"
+      echo "[safety] BLOCKED: Skill '$DETECTED' is disabled." >&2
+      exit 1
+      ;;
+    *)
+      # Registered but not onboarded
+      log "BLOCKED_NOT_ONBOARDED skill=$DETECTED"
+      cat >&2 << EOF
 [safety] BLOCKED: Skill '$DETECTED' is registered but not yet onboarded.
 [safety]
 [safety] To complete onboarding:
@@ -294,17 +279,29 @@ EOF
 [safety]
 [safety] This is a ONE-TIME process. The skill will start in 'probation'
 [safety] status where only critical rules are enforced.
-[safety] ═══════════════════════════════════════════════════════════════
 EOF
-        exit 1
-        ;;
-    esac
+      exit 1
+      ;;
+  esac
+
+else
+  # ── No skill detected — check infrastructure allowlist ────────────
+  if check_allowlist; then
+    log "ALLOWED infra"
+    exec /bin/bash "$@"
+  else
+    log "BLOCKED_DEFAULT_DENY"
+    cat >&2 << 'EOF'
+[safety] BLOCKED: Command not recognized as a registered skill or
+[safety] allowed infrastructure command.
+[safety]
+[safety] If this is a new tool/skill:
+[safety]   claw-clips skills add <name> --detect "pattern1,pattern2"
+[safety]   Then complete the onboarding process.
+[safety]
+[safety] If this is a safe infrastructure command:
+[safety]   claw-clips allowlist add "<pattern>" --reason "description"
+EOF
+    exit 1
   fi
 fi
-
-# ═══════════════════════════════════════════════════════════════════════
-# ALL CHECKS PASSED
-# ═══════════════════════════════════════════════════════════════════════
-
-log "ALLOWED"
-exec /bin/bash "$@"

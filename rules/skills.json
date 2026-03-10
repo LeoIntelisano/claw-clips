@@ -1,33 +1,15 @@
 {
   "gog-secure": {
     "detect": [
-      "gmail",
-      "calendar",
-      "google.mail",
-      "messages.list",
-      "messages.send",
-      "messages.get",
-      "messages.delete",
-      "messages.trash",
-      "messages.modify",
-      "messages.batchDelete",
-      "messages.batchModify",
-      "threads.",
-      "labels.",
-      "drafts.",
-      "forwarding",
-      "events.list",
-      "events.insert",
-      "events.update",
-      "events.delete",
-      "events.move",
-      "calendarList",
-      "freebusy",
-      "acl."
+      "gog "
     ],
     "capabilities": [
       "email",
-      "calendar"
+      "calendar",
+      "drive",
+      "contacts",
+      "sheets",
+      "docs"
     ],
     "onboarded": "2026-03-10T00:00:00Z",
     "status": "active",
