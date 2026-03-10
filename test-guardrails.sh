@@ -247,10 +247,47 @@ R
   echo '{"searxng":{"detect":["searxng","search.py"],"status":"disabled","onboarded":"2026-03-10"}}' > "$OPENCLAW_DIR/rules/skills.json"
   out=$(run_shim "echo searxng search.py query"); assert_exit 1 $? "Skill: python script for disabled skill → block"
 
-  # ── AUDIT LOG: verify default deny is logged ──────────────────────
+  # ── SKILL HASH VERIFICATION ───────────────────────────────────────
+
+  # Create a fake skill file to hash
+  echo "version 1 of skill" > "$OPENCLAW_DIR/test_skill.md"
+  local test_hash
+  test_hash=$(sha256sum "$OPENCLAW_DIR/test_skill.md" | cut -d' ' -f1)
+
+  # Skill with matching hash → allow
+  cat > "$OPENCLAW_DIR/rules/skills.json" << HJSON
+{"hashtest":{"detect":["hashtest"],"status":"active","onboarded":"2026-03-10","skill_file":"$OPENCLAW_DIR/test_skill.md","hash":"$test_hash"}}
+HJSON
+  out=$(run_shim "echo hashtest do-thing"); assert_exit 0 $? "Hash: matching hash → allow"
+
+  # Modify the skill file → hash mismatch → block
+  echo "version 2 with NEW CAPABILITIES" > "$OPENCLAW_DIR/test_skill.md"
+  out=$(run_shim "echo hashtest do-thing"); assert_exit 1 $? "Hash: modified file → block"
+  assert_contains "$out" "changed" "Hash: block message mentions change"
+  assert_contains "$out" "ASK THE USER" "Hash: tells agent to ask user"
+  assert_contains "$out" "rehash" "Hash: mentions rehash option"
+  assert_contains "$out" "registered" "Hash: mentions re-onboard option"
+
+  # Verify it's logged correctly
+  assert_file_contains "$OPENCLAW_DIR/safety-audit.log" "BLOCKED_HASH_CHANGED" "Hash: mismatch logged"
+
+  # Skill with no hash stored (backward compat) → allow
+  echo '{"nohash":{"detect":["nohash"],"status":"active","onboarded":"2026-03-10"}}' > "$OPENCLAW_DIR/rules/skills.json"
+  out=$(run_shim "echo nohash do-thing"); assert_exit 0 $? "Hash: no hash stored → allow (backward compat)"
+
+  # Skill with hash but file missing → allow (graceful degradation)
+  echo '{"missingfile":{"detect":["missingfile"],"status":"active","onboarded":"2026-03-10","skill_file":"/nonexistent/path.md","hash":"abc123"}}' > "$OPENCLAW_DIR/rules/skills.json"
+  out=$(run_shim "echo missingfile do-thing"); assert_exit 0 $? "Hash: file missing → allow (graceful)"
+
+  # Skill with empty hash field → allow
+  echo '{"emptyhash":{"detect":["emptyhash"],"status":"active","onboarded":"2026-03-10","skill_file":"","hash":""}}' > "$OPENCLAW_DIR/rules/skills.json"
+  out=$(run_shim "echo emptyhash do-thing"); assert_exit 0 $? "Hash: empty hash field → allow"
+
+  # ── AUDIT LOG: verify all actions logged ──────────────────────────
   assert_file_contains "$OPENCLAW_DIR/safety-audit.log" "BLOCKED_DEFAULT_DENY" "Audit: default deny logged"
   assert_file_contains "$OPENCLAW_DIR/safety-audit.log" "ALLOWED infra" "Audit: allowlist pass logged"
   assert_file_contains "$OPENCLAW_DIR/safety-audit.log" "ALLOWED skill=" "Audit: skill pass logged"
+  assert_file_contains "$OPENCLAW_DIR/safety-audit.log" "BLOCKED_HASH_CHANGED" "Audit: hash change logged"
 
   teardown_env
 else

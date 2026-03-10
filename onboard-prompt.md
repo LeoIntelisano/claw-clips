@@ -68,3 +68,13 @@ Required fields:
 ## Output
 
 ONLY the JSONL rules, one per line. Nothing else.
+
+## Important
+
+After generating rules and running `claw-clips skills onboard`, STOP.
+The skill enters probation. The human operator will review your proposed
+rules and activate the skill. Do NOT run `claw-clips skills set` or
+`claw-clips promote` — these are operator-only commands.
+
+If this is a re-onboarding (skill definition changed), focus on what's NEW
+in the skill definition compared to the existing deny rules.

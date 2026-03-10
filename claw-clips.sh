@@ -443,31 +443,40 @@ cmd_skills() {
     add)
       local skill_name="${1:-}"
       shift || true
-      local detect_str="" caps_str=""
+      local detect_str="" caps_str="" skill_file=""
 
       while [[ $# -gt 0 ]]; do
         case "$1" in
           --detect)       detect_str="$2"; shift 2 ;;
           --capabilities) caps_str="$2";   shift 2 ;;
+          --skill-file)   skill_file="$2"; shift 2 ;;
           *) shift ;;
         esac
       done
 
-      [ -n "$skill_name" ] || die "Usage: claw-clips skills add <name> --detect \"pat1,pat2\" [--capabilities \"email,calendar\"]"
+      [ -n "$skill_name" ] || die "Usage: claw-clips skills add <n> --detect \"pat1,pat2\" [--capabilities \"a,b\"] [--skill-file /path/to/SKILL.md]"
       [ -n "$detect_str" ] || die "Must provide --detect patterns"
 
-      # Convert comma-separated to JSON array
       local detect_json caps_json
       detect_json=$(echo "$detect_str" | tr ',' '\n' | jq -R -s 'split("\n") | map(select(. != ""))')
       caps_json=$(echo "${caps_str:-}" | tr ',' '\n' | jq -R -s 'split("\n") | map(select(. != ""))')
 
+      local sf_arg="" hash_arg=""
+      if [ -n "$skill_file" ] && [ -f "$skill_file" ]; then
+        sf_arg=$(realpath "$skill_file" 2>/dev/null || echo "$skill_file")
+        hash_arg=$(sha256sum "$sf_arg" 2>/dev/null | cut -d' ' -f1)
+      fi
+
       jq --arg s "$skill_name" \
          --argjson d "$detect_json" \
          --argjson c "$caps_json" \
-         '.[$s] = (.[$s] // {}) + {"detect": $d, "capabilities": $c, "status": "registered"}' \
+         --arg sf "$sf_arg" \
+         --arg h "$hash_arg" \
+         '.[$s] = (.[$s] // {}) + {"detect": $d, "capabilities": $c, "status": "registered", "skill_file": $sf, "hash": $h}' \
          "$SKILLS_REG" > "$SKILLS_REG.tmp" && mv "$SKILLS_REG.tmp" "$SKILLS_REG"
 
       info "Registered skill '$skill_name' with $(echo "$detect_json" | jq 'length') detection patterns."
+      [ -n "$hash_arg" ] && echo -e "${DIM}  Tracking: $sf_arg (hash: ${hash_arg:0:16}...)${RESET}"
       echo -e "${DIM}  Status: registered (not yet onboarded)${RESET}"
       echo -e "${DIM}  Next: generate safety rules, then run: claw-clips skills onboard $skill_name${RESET}"
       ;;
@@ -516,6 +525,55 @@ cmd_skills() {
         '.[$s].status = $st' "$SKILLS_REG" > "$SKILLS_REG.tmp" \
         && mv "$SKILLS_REG.tmp" "$SKILLS_REG"
       info "Set $skill_name → $new_status"
+      ;;
+
+    rehash)
+      local skill_name="${1:-}"
+      [ -n "$skill_name" ] || die "Usage: claw-clips skills rehash <skill_name>"
+
+      local skill_file
+      skill_file=$(jq -r --arg s "$skill_name" '.[$s].skill_file // empty' "$SKILLS_REG")
+      [ -n "$skill_file" ] || die "No skill_file tracked for '$skill_name'. Re-register with --skill-file."
+      [ -f "$skill_file" ] || die "Skill file not found: $skill_file"
+
+      local new_hash
+      new_hash=$(sha256sum "$skill_file" 2>/dev/null | cut -d' ' -f1)
+
+      jq --arg s "$skill_name" --arg h "$new_hash" \
+        '.[$s].hash = $h' "$SKILLS_REG" > "$SKILLS_REG.tmp" \
+        && mv "$SKILLS_REG.tmp" "$SKILLS_REG"
+      info "Rehashed $skill_name: ${new_hash:0:16}..."
+      ;;
+
+    check)
+      echo ""
+      echo -e "${BOLD}  Skill Hash Verification${RESET}"
+      echo "  ──────────────────────────────────────"
+      local issues=0
+
+      jq -r 'to_entries[] | "\(.key)\t\(.value.skill_file // "")\t\(.value.hash // "")"' "$SKILLS_REG" | \
+      while IFS=$'\t' read -r name sfile shash; do
+        if [ -z "$sfile" ] || [ -z "$shash" ]; then
+          echo -e "  %-14s ${DIM}no hash tracked${RESET}" "$name"
+          continue
+        fi
+        if [ ! -f "$sfile" ]; then
+          echo -e "  ${RED}$name${RESET}  file missing: $sfile"
+          ((issues++)) || true
+          continue
+        fi
+        local current
+        current=$(sha256sum "$sfile" 2>/dev/null | cut -d' ' -f1)
+        if [ "$current" = "$shash" ]; then
+          echo -e "  ${GREEN}$name${RESET}  hash OK"
+        else
+          echo -e "  ${RED}$name${RESET}  CHANGED — re-onboard required"
+          echo -e "    ${DIM}stored: ${shash:0:16}...${RESET}"
+          echo -e "    ${DIM}current: ${current:0:16}...${RESET}"
+          ((issues++)) || true
+        fi
+      done
+      echo ""
       ;;
 
     *)

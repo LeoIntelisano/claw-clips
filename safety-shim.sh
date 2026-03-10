@@ -1,25 +1,25 @@
 #!/bin/bash
 # ~/bin/bash
 # ═══════════════════════════════════════════════════════════════════════
-# OpenClaw Safety Shim
+# Claw-Clips Safety Shim
 # ═══════════════════════════════════════════════════════════════════════
 #
 # Named 'bash' so node's child_process resolves it via PATH lookup.
-# Scoped exclusively to the openclaw-gateway systemd service via drop-in:
+# Scoped exclusively to the agent's systemd service via drop-in:
 #   Environment="PATH=$HOME/bin:..."
-# Has zero effect on interactive WSL sessions which use their own PATH.
+# Has zero effect on interactive shell sessions which use their own PATH.
 #
 # Three enforcement layers:
 #   1. Hard-coded sensitive/destructive patterns (zero deps, instant)
 #   2. JSONL deny rules from active.jsonl + pending.jsonl
 #   3. Default-deny: skill gate + infrastructure allowlist
 #      - Known skill + onboarded → allow (subject to deny rules)
+#      - Known skill + hash changed → block (re-onboard required)
 #      - Known skill + not onboarded → block with instructions
 #      - Not a skill + on allowlist → allow (infrastructure commands)
 #      - Not a skill + not on allowlist → BLOCK
 #
 # Logs all exec calls to $OC_DIR/safety-audit.log.
-# Everything else passes through to /bin/bash.
 # ═══════════════════════════════════════════════════════════════════════
 
 set -uo pipefail
@@ -37,7 +37,7 @@ ONBOARD_PROMPT="$OC_DIR/prompts/onboard.md"
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 CMD="$*"
 
-# ── Bootstrap (first run creates dirs/files) ───────────────────────────
+# ── Bootstrap ──────────────────────────────────────────────────────────
 mkdir -p "$RULES_DIR" "$OC_DIR/prompts" "$(dirname "$AUDIT")"
 [ -f "$SKILLS_REG" ]    || echo '{}' > "$SKILLS_REG"
 [ -f "$ACTIVE_RULES" ]  || touch "$ACTIVE_RULES"
@@ -55,7 +55,6 @@ case "${1:-}" in
     ;;
 esac
 
-# Empty command — just pass through
 [ -z "$CMD" ] && exec /bin/bash "$@"
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -117,10 +116,6 @@ done
 # ═══════════════════════════════════════════════════════════════════════
 # LAYER 2: JSONL deny rules
 # ═══════════════════════════════════════════════════════════════════════
-#
-# active.jsonl  → enforces critical + high
-# pending.jsonl → enforces ONLY critical (unreviewed agent proposals)
-# ═══════════════════════════════════════════════════════════════════════
 
 check_jsonl_rules() {
   local rules_file="$1"
@@ -146,14 +141,12 @@ check_jsonl_rules() {
     [ "$action" = "deny" ] || continue
     [ -n "$pattern" ]      || continue
 
-    # Severity gate
     case "$min_severity" in
       critical) [ "$severity" = "critical" ] || continue ;;
       high)     case "$severity" in critical|high) ;; *) continue ;; esac ;;
       *)        continue ;;
     esac
 
-    # Match
     local matched=false
     case "$ptype" in
       exact)    [[ "$CMD" == "$pattern" ]] && matched=true ;;
@@ -175,15 +168,6 @@ check_jsonl_rules "$PENDING_RULES" "pending" "critical"
 
 # ═══════════════════════════════════════════════════════════════════════
 # LAYER 3: Default-deny with skill gate + infrastructure allowlist
-# ═══════════════════════════════════════════════════════════════════════
-#
-# Model: DENY BY DEFAULT. A command is only allowed if:
-#   (a) It matches a registered, onboarded skill, OR
-#   (b) It matches the infrastructure allowlist (safe shell commands)
-#
-# Skill detection is DATA-DRIVEN from skills.json detect patterns.
-# The allowlist covers basic shell commands the agent needs to function.
-# Everything else is BLOCKED.
 # ═══════════════════════════════════════════════════════════════════════
 
 detect_skill() {
@@ -210,13 +194,9 @@ detect_skill() {
 }
 
 check_allowlist() {
-  # Check if command matches any pattern in the infrastructure allowlist.
-  # Returns 0 (true) if allowed, 1 (false) if not.
   [ -f "$ALLOWLIST" ] || return 1
   [ -s "$ALLOWLIST" ] || return 1
 
-  # The allowlist is checked against the ARGUMENTS to -c, not the raw CMD.
-  # CMD="$*" includes "-c <actual_command>", so strip the "-c " prefix.
   local check_cmd="$CMD"
   if [[ "$check_cmd" == -c\ * ]]; then
     check_cmd="${check_cmd#-c }"
@@ -231,7 +211,6 @@ check_allowlist() {
       pattern=$(echo "$rule" | jq -r '.pattern // empty' 2>/dev/null) || continue
       ptype=$(echo "$rule" | jq -r '.type // "regex"' 2>/dev/null)
     else
-      # Fallback: try to extract pattern with grep if jq unavailable
       continue
     fi
 
@@ -247,16 +226,60 @@ check_allowlist() {
   return 1
 }
 
+check_skill_hash() {
+  # Verify a skill's definition file hasn't changed since onboarding.
+  # Returns 0 if hash matches or no hash stored, 1 if changed.
+  local skill_name="$1"
+  command -v jq > /dev/null 2>&1 || return 0
+
+  local stored_hash skill_file
+  stored_hash=$(jq -r --arg s "$skill_name" '.[$s].hash // empty' "$SKILLS_REG" 2>/dev/null)
+  skill_file=$(jq -r --arg s "$skill_name" '.[$s].skill_file // empty' "$SKILLS_REG" 2>/dev/null)
+
+  # No hash stored or no file tracked → skip check (backward compatible)
+  [ -n "$stored_hash" ] || return 0
+  [ -n "$skill_file" ]  || return 0
+  [ -f "$skill_file" ]  || return 0
+
+  local current_hash
+  current_hash=$(sha256sum "$skill_file" 2>/dev/null | cut -d' ' -f1)
+
+  [ "$stored_hash" = "$current_hash" ]
+}
+
 DETECTED=$(detect_skill)
 
 if [ -n "$DETECTED" ]; then
-  # ── Command matches a registered skill ────────────────────────────
   skill_status=$(jq -r --arg s "$DETECTED" \
     '.[$s].status // "unregistered"' "$SKILLS_REG" 2>/dev/null)
 
   case "$skill_status" in
     active|probation)
-      # Onboarded — allow (deny rules already checked in Layer 2)
+      # Check if skill definition has changed since onboarding
+      if ! check_skill_hash "$DETECTED"; then
+        log "BLOCKED_HASH_CHANGED skill=$DETECTED"
+        cat >&2 << EOF
+[safety] BLOCKED: Skill '$DETECTED' definition has changed since onboarding.
+[safety]
+[safety] The skill file has been modified since this skill was last onboarded.
+[safety] This could be a minor formatting change or a significant capability addition.
+[safety]
+[safety] ASK THE USER which action to take:
+[safety]
+[safety]   Option A — Minor/cosmetic change (no new capabilities):
+[safety]     The operator runs: claw-clips skills rehash $DETECTED
+[safety]     This updates the stored hash and resumes normal operation.
+[safety]
+[safety]   Option B — Significant change (new capabilities or permissions):
+[safety]     The operator runs: claw-clips skills set $DETECTED registered
+[safety]     Then complete the full onboarding process again to generate
+[safety]     deny rules covering the new capabilities.
+[safety]
+[safety] Do NOT attempt to rehash or re-onboard yourself. Present both
+[safety] options to the user and wait for their decision.
+EOF
+        exit 1
+      fi
       log "ALLOWED skill=$DETECTED"
       exec /bin/bash "$@"
       ;;
@@ -266,7 +289,6 @@ if [ -n "$DETECTED" ]; then
       exit 1
       ;;
     *)
-      # Registered but not onboarded
       log "BLOCKED_NOT_ONBOARDED skill=$DETECTED"
       cat >&2 << EOF
 [safety] BLOCKED: Skill '$DETECTED' is registered but not yet onboarded.
@@ -285,7 +307,6 @@ EOF
   esac
 
 else
-  # ── No skill detected — check infrastructure allowlist ────────────
   if check_allowlist; then
     log "ALLOWED infra"
     exec /bin/bash "$@"
@@ -300,7 +321,7 @@ else
 [safety]   Then complete the onboarding process.
 [safety]
 [safety] If this is a safe infrastructure command:
-[safety]   claw-clips allowlist add "<pattern>" --reason "description"
+[safety]   Ask the operator to add it to the allowlist.
 EOF
     exit 1
   fi
