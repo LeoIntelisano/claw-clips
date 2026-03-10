@@ -24,6 +24,7 @@ CYAN='\033[96m'; DIM='\033[2m'; BOLD='\033[1m'; RESET='\033[0m'
 
 SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
 OC_DIR="$HOME/.openclaw"
+CC_DIR="$OC_DIR/claw-clips"
 BIN_DIR="$HOME/bin"
 
 info()  { echo -e "${GREEN}  ✓ $*${RESET}"; }
@@ -53,12 +54,10 @@ done
 
 step "2. Creating directory structure"
 
-mkdir -p "$OC_DIR/rules"
-mkdir -p "$OC_DIR/prompts"
+mkdir -p "$CC_DIR"
 mkdir -p "$BIN_DIR"
 
-info "$OC_DIR/rules/"
-info "$OC_DIR/prompts/"
+info "$CC_DIR/"
 info "$BIN_DIR/"
 
 # ── Step 3: Install files ─────────────────────────────────────────
@@ -72,36 +71,63 @@ if [ -f "$BIN_DIR/bash" ]; then
 fi
 
 cp "$SRC_DIR/safety-shim.sh"   "$BIN_DIR/bash"
-cp "$SRC_DIR/claw-clips.sh"      "$BIN_DIR/claw-clips"
-cp "$SRC_DIR/onboard-prompt.md" "$OC_DIR/prompts/onboard.md"
+
+# Find CLI script — may be named claw-clips.sh or claw-clips.sh
+if [ -f "$SRC_DIR/claw-clips.sh" ]; then
+  cp "$SRC_DIR/claw-clips.sh" "$BIN_DIR/claw-clips"
+elif [ -f "$SRC_DIR/claw-clips.sh" ]; then
+  cp "$SRC_DIR/claw-clips.sh" "$BIN_DIR/claw-clips"
+else
+  err "CLI script not found (expected claw-clips.sh or claw-clips.sh in $SRC_DIR)"
+  exit 1
+fi
+
+cp "$SRC_DIR/onboard-prompt.md" "$CC_DIR/onboard.md"
 
 info "~/bin/bash          (safety shim)"
-info "~/bin/claw-clips      (CLI manager)"
-info "~/.openclaw/prompts/onboard.md"
+info "~/bin/claw-clips    (CLI manager)"
+info "~/.openclaw/claw-clips/onboard.md"
 
 # ── Step 4: Seed rules and registry (only if not already present) ──
 
 step "4. Seeding rules and registry"
 
-if [ ! -s "$OC_DIR/rules/active.jsonl" ]; then
-  cp "$SRC_DIR/rules/active.jsonl" "$OC_DIR/rules/active.jsonl"
+if [ ! -s "$CC_DIR/active.jsonl" ]; then
+  cp "$SRC_DIR/rules/active.jsonl" "$CC_DIR/active.jsonl"
   info "Seeded active.jsonl with initial rules"
 else
   warn "active.jsonl already exists — skipping seed"
 fi
 
-if [ ! -s "$OC_DIR/rules/pending.jsonl" ]; then
-  touch "$OC_DIR/rules/pending.jsonl"
+if [ ! -s "$CC_DIR/pending.jsonl" ]; then
+  touch "$CC_DIR/pending.jsonl"
   info "Created empty pending.jsonl"
 else
   warn "pending.jsonl already exists — skipping"
 fi
 
-if [ ! -s "$OC_DIR/rules/skills.json" ]; then
-  cp "$SRC_DIR/rules/skills.json" "$OC_DIR/rules/skills.json"
-  info "Seeded skills.json with gog-secure"
+if [ ! -s "$CC_DIR/skills.json" ]; then
+  if [ -s "$SRC_DIR/rules/skills.json" ]; then
+    cp "$SRC_DIR/rules/skills.json" "$CC_DIR/skills.json"
+    info "Seeded skills.json"
+  else
+    echo '{}' > "$CC_DIR/skills.json"
+    info "Created empty skills.json"
+  fi
 else
   warn "skills.json already exists — skipping seed"
+fi
+
+if [ ! -s "$CC_DIR/allowlist.jsonl" ]; then
+  cp "$SRC_DIR/rules/allowlist.jsonl" "$CC_DIR/allowlist.jsonl"
+  info "Seeded allowlist.jsonl with infrastructure commands"
+else
+  warn "allowlist.jsonl already exists — skipping seed"
+fi
+
+if [ -f "$SRC_DIR/README.md" ]; then
+  cp "$SRC_DIR/README.md" "$CC_DIR/README.md"
+  info "Installed README.md"
 fi
 
 # ── Step 5: Set permissions ────────────────────────────────────────
@@ -126,65 +152,69 @@ info "~/bin/claw-clips       755 (rwxr-xr-x)  — executable"
 # and it only does so via claw-clips commands (which are human-invoked).
 # The agent can only append to pending.jsonl.
 
-chmod 444 "$OC_DIR/rules/active.jsonl"
+chmod 444 "$CC_DIR/active.jsonl"
 info "active.jsonl         444 (r--r--r--)  — read-only"
 echo -e "  ${DIM}  The agent cannot modify this file. Only claw-clips can (with chmod).${RESET}"
 echo -e "  ${DIM}  claw-clips promote/demote/delete temporarily chmod 644 then restores 444.${RESET}"
 
-chmod 644 "$OC_DIR/rules/pending.jsonl"
+chmod 644 "$CC_DIR/pending.jsonl"
 info "pending.jsonl        644 (rw-r--r--)  — agent can append"
 
-chmod 644 "$OC_DIR/rules/skills.json"
-info "skills.json          644 (rw-r--r--)  — writable for onboarding"
+chmod 444 "$CC_DIR/skills.json"
+info "skills.json          444 (r--r--r--)  — read-only"
+echo -e "  ${DIM}  The agent cannot modify this file. Only claw-clips can (with chmod).${RESET}"
 
-chmod 644 "$OC_DIR/prompts/onboard.md"
+chmod 444 "$CC_DIR/allowlist.jsonl"
+info "allowlist.jsonl      444 (r--r--r--)  — read-only"
+
+chmod 644 "$CC_DIR/onboard.md"
 info "onboard.md           644 (rw-r--r--)  — readable by agent"
 
 # ── Audit log ──
-touch "$OC_DIR/safety-audit.log"
-chmod 644 "$OC_DIR/safety-audit.log"
+touch "$CC_DIR/safety-audit.log"
+chmod 644 "$CC_DIR/safety-audit.log"
 info "safety-audit.log     644 (rw-r--r--)  — append by shim"
 
-# ── Step 6: Patch claw-clips to handle read-only active.jsonl ────────
+# ── Step 6: Verify installation ──
 
 step "6. Verifying installation"
 
 # Verify shim can be executed
-if bash "$BIN_DIR/bash" -c "echo test" > /dev/null 2>&1; then
+if /usr/bin/bash "$BIN_DIR/bash" -c "echo test" > /dev/null 2>&1; then
   info "Shim executes correctly"
 else
   err "Shim failed to execute"
 fi
 
 # Verify claw-clips
-if bash "$BIN_DIR/claw-clips" help > /dev/null 2>&1; then
+if /usr/bin/bash "$BIN_DIR/claw-clips" help > /dev/null 2>&1; then
   info "claw-clips help runs"
 else
   err "claw-clips failed"
 fi
 
 # Verify jq can read skills.json
-if jq -e '.' "$OC_DIR/rules/skills.json" > /dev/null 2>&1; then
+if jq -e '.' "$CC_DIR/skills.json" > /dev/null 2>&1; then
   info "skills.json is valid JSON"
 else
   err "skills.json is invalid"
 fi
 
 # Verify active.jsonl is read-only
-if [ ! -w "$OC_DIR/rules/active.jsonl" ]; then
+if [ ! -w "$CC_DIR/active.jsonl" ]; then
   info "active.jsonl is read-only"
 else
   warn "active.jsonl is writable — expected read-only"
 fi
 
 # Count rules
-active_count=$(grep -c . "$OC_DIR/rules/active.jsonl" 2>/dev/null || echo 0)
+active_count=$(grep -c . "$CC_DIR/active.jsonl" 2>/dev/null || echo 0)
 info "Active rules: $active_count"
 
 # Show skills
 echo ""
 echo -e "${DIM}  Registered skills:${RESET}"
-jq -r 'to_entries[] | "    \(.key): \(.value.status)"' "$OC_DIR/rules/skills.json"
+jq -r 'to_entries[] | "    \(.key): \(.value.status)"' "$CC_DIR/skills.json"
 
 # ── Summary ────────────────────────────────────────────────────────
 
@@ -196,11 +226,11 @@ echo ""
 echo -e "  ${BOLD}File layout:${RESET}"
 echo -e "  ~/bin/bash                          ${DIM}safety shim (755)${RESET}"
 echo -e "  ~/bin/claw-clips                      ${DIM}CLI tool (755)${RESET}"
-echo -e "  ~/.openclaw/rules/active.jsonl      ${DIM}enforced rules (444 read-only)${RESET}"
-echo -e "  ~/.openclaw/rules/pending.jsonl     ${DIM}agent proposals (644)${RESET}"
-echo -e "  ~/.openclaw/rules/skills.json       ${DIM}skill registry (644)${RESET}"
-echo -e "  ~/.openclaw/prompts/onboard.md      ${DIM}onboarding prompt (644)${RESET}"
-echo -e "  ~/.openclaw/safety-audit.log        ${DIM}audit trail (644)${RESET}"
+echo -e "  ~/.openclaw/claw-clips/active.jsonl      ${DIM}enforced rules (444 read-only)${RESET}"
+echo -e "  ~/.openclaw/claw-clips/pending.jsonl     ${DIM}agent proposals (644)${RESET}"
+echo -e "  ~/.openclaw/claw-clips/skills.json       ${DIM}skill registry (644)${RESET}"
+echo -e "  ~/.openclaw/claw-clips/onboard.md      ${DIM}onboarding prompt (644)${RESET}"
+echo -e "  ~/.openclaw/claw-clips/safety-audit.log        ${DIM}audit trail (644)${RESET}"
 echo ""
 echo -e "  ${BOLD}Quick start:${RESET}"
 echo -e "  claw-clips help                 ${DIM}show all commands${RESET}"
@@ -219,13 +249,13 @@ cat << 'MEMORY'
   and tell you what to do. Follow the shim's instructions exactly.
 
   You can propose new deny rules by appending JSONL to:
-    ~/.openclaw/rules/pending.jsonl
+    ~/.openclaw/claw-clips/pending.jsonl
   You can read the onboarding template at:
-    ~/.openclaw/prompts/onboard.md
+    ~/.openclaw/claw-clips/onboard.md
   You can read the audit log at:
-    ~/.openclaw/safety-audit.log
+    ~/.openclaw/claw-clips/safety-audit.log
 
-  You CANNOT modify ~/.openclaw/rules/active.jsonl — it is read-only.
+  You CANNOT modify ~/.openclaw/claw-clips/active.jsonl — it is read-only.
   Only the human operator can promote, demote, or delete rules.
 MEMORY
 echo ""

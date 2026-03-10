@@ -1,0 +1,55 @@
+{"pattern": "^echo ", "type": "regex", "reason": "Basic output and string manipulation"}
+{"pattern": "^printf ", "type": "regex", "reason": "Formatted output"}
+{"pattern": "^cat [^|]", "type": "regex", "reason": "File reading (not piped to shell)"}
+{"pattern": "^head ", "type": "regex", "reason": "File preview"}
+{"pattern": "^tail ", "type": "regex", "reason": "File tail reading"}
+{"pattern": "^less ", "type": "regex", "reason": "File paging"}
+{"pattern": "^wc ", "type": "regex", "reason": "Word/line counting"}
+{"pattern": "^ls", "type": "regex", "reason": "Directory listing"}
+{"pattern": "^pwd", "type": "regex", "reason": "Current directory"}
+{"pattern": "^cd ", "type": "regex", "reason": "Change directory"}
+{"pattern": "^find ", "type": "regex", "reason": "File search"}
+{"pattern": "^stat ", "type": "regex", "reason": "File metadata"}
+{"pattern": "^file ", "type": "regex", "reason": "File type detection"}
+{"pattern": "^realpath ", "type": "regex", "reason": "Resolve path"}
+{"pattern": "^readlink ", "type": "regex", "reason": "Read symlink"}
+{"pattern": "^mkdir ", "type": "regex", "reason": "Create directories"}
+{"pattern": "^cp ", "type": "regex", "reason": "Copy files"}
+{"pattern": "^mv ", "type": "regex", "reason": "Move/rename files"}
+{"pattern": "^touch ", "type": "regex", "reason": "Create empty files / update timestamps"}
+{"pattern": "^test ", "type": "regex", "reason": "File/string test conditionals"}
+{"pattern": "^\\[ ", "type": "regex", "reason": "Conditional expressions"}
+{"pattern": "^grep ", "type": "regex", "reason": "Text search"}
+{"pattern": "^sed ", "type": "regex", "reason": "Stream editing"}
+{"pattern": "^awk ", "type": "regex", "reason": "Text processing"}
+{"pattern": "^sort ", "type": "regex", "reason": "Sorting"}
+{"pattern": "^uniq ", "type": "regex", "reason": "Deduplication"}
+{"pattern": "^cut ", "type": "regex", "reason": "Column extraction"}
+{"pattern": "^tr ", "type": "regex", "reason": "Character translation"}
+{"pattern": "^tee ", "type": "regex", "reason": "Pipe tee"}
+{"pattern": "^xargs ", "type": "regex", "reason": "Argument builder"}
+{"pattern": "^diff ", "type": "regex", "reason": "File comparison"}
+{"pattern": "^date", "type": "regex", "reason": "Date/time operations"}
+{"pattern": "^sleep ", "type": "regex", "reason": "Delay"}
+{"pattern": "^true$", "type": "regex", "reason": "No-op success"}
+{"pattern": "^false$", "type": "regex", "reason": "No-op failure"}
+{"pattern": "^which ", "type": "regex", "reason": "Locate binaries"}
+{"pattern": "^command ", "type": "regex", "reason": "Command existence check"}
+{"pattern": "^type ", "type": "regex", "reason": "Command type check"}
+{"pattern": "^env$", "type": "regex", "reason": "Environment listing"}
+{"pattern": "^export ", "type": "regex", "reason": "Set environment variables"}
+{"pattern": "^uname", "type": "regex", "reason": "System info"}
+{"pattern": "^whoami", "type": "regex", "reason": "Current user"}
+{"pattern": "^id$", "type": "regex", "reason": "User/group info"}
+{"pattern": "^hostname", "type": "regex", "reason": "System hostname"}
+{"pattern": "^jq ", "type": "regex", "reason": "JSON processing"}
+{"pattern": "^python3 -c ", "type": "regex", "reason": "Inline python for data processing"}
+{"pattern": "^node -e ", "type": "regex", "reason": "Inline node.js for data processing"}
+{"pattern": "^pip3? (list|show|--version)", "type": "regex", "reason": "Python package info (read-only)"}
+{"pattern": "^npm (list|ls|--version|view)", "type": "regex", "reason": "Node package info (read-only)"}
+{"pattern": "^basename ", "type": "regex", "reason": "Path basename"}
+{"pattern": "^dirname ", "type": "regex", "reason": "Path dirname"}
+{"pattern": "^sha256sum ", "type": "regex", "reason": "File checksums"}
+{"pattern": "^md5sum ", "type": "regex", "reason": "File checksums"}
+{"pattern": "^base64 ", "type": "regex", "reason": "Base64 encode/decode"}
+{"pattern": "^claw-clips ", "type": "regex", "reason": "Safety rules CLI (self-management)"}

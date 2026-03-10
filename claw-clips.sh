@@ -16,17 +16,18 @@
 set -euo pipefail
 
 OC_DIR="${OPENCLAW_DIR:-$HOME/.openclaw}"
-RULES_DIR="$OC_DIR/rules"
+CC_DIR="$OC_DIR/claw-clips"
+RULES_DIR="$CC_DIR"
 ACTIVE="$RULES_DIR/active.jsonl"
 PENDING="$RULES_DIR/pending.jsonl"
 SKILLS_REG="$RULES_DIR/skills.json"
-AUDIT="$OC_DIR/safety-audit.log"
-ONBOARD_PROMPT="$OC_DIR/prompts/onboard.md"
+AUDIT="$CC_DIR/safety-audit.log"
+ONBOARD_PROMPT="$CC_DIR/onboard.md"
 
 RED='\033[91m'; YELLOW='\033[93m'; GREEN='\033[92m'
 CYAN='\033[96m'; DIM='\033[2m'; BOLD='\033[1m'; RESET='\033[0m'
 
-mkdir -p "$RULES_DIR" "$OC_DIR/prompts"
+mkdir -p "$CC_DIR"
 [ -f "$ACTIVE" ]     || touch "$ACTIVE"
 [ -f "$PENDING" ]    || touch "$PENDING"
 [ -f "$SKILLS_REG" ] || echo '{}' > "$SKILLS_REG"
@@ -39,10 +40,12 @@ warn() { echo -e "${YELLOW}$*${RESET}"; }
 
 need_jq() { command -v jq > /dev/null 2>&1 || die "jq is required. Install: sudo apt install jq"; }
 
-# active.jsonl is set 444 (read-only) to prevent agent writes.
-# claw-clips needs to temporarily unlock it for promote/demote/delete.
+# active.jsonl and skills.json are set 444 (read-only) to prevent agent writes.
+# claw-clips needs to temporarily unlock them for modifications.
 unlock_active() { chmod 644 "$ACTIVE" 2>/dev/null || true; }
 lock_active()   { chmod 444 "$ACTIVE" 2>/dev/null || true; }
+unlock_skills() { chmod 644 "$SKILLS_REG" 2>/dev/null || true; }
+lock_skills()   { chmod 444 "$SKILLS_REG" 2>/dev/null || true; }
 
 
 severity_color() {
@@ -467,6 +470,7 @@ cmd_skills() {
         hash_arg=$(sha256sum "$sf_arg" 2>/dev/null | cut -d' ' -f1)
       fi
 
+      unlock_skills
       jq --arg s "$skill_name" \
          --argjson d "$detect_json" \
          --argjson c "$caps_json" \
@@ -474,6 +478,7 @@ cmd_skills() {
          --arg h "$hash_arg" \
          '.[$s] = (.[$s] // {}) + {"detect": $d, "capabilities": $c, "status": "registered", "skill_file": $sf, "hash": $h}' \
          "$SKILLS_REG" > "$SKILLS_REG.tmp" && mv "$SKILLS_REG.tmp" "$SKILLS_REG"
+      lock_skills
 
       info "Registered skill '$skill_name' with $(echo "$detect_json" | jq 'length') detection patterns."
       [ -n "$hash_arg" ] && echo -e "${DIM}  Tracking: $sf_arg (hash: ${hash_arg:0:16}...)${RESET}"
@@ -500,9 +505,11 @@ cmd_skills() {
       local ts
       ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
+      unlock_skills
       jq --arg s "$skill_name" --arg t "$ts" --arg rc "$rule_count" \
         '.[$s].onboarded = $t | .[$s].status = "probation" | .[$s].rules_count = ($rc | tonumber)' \
         "$SKILLS_REG" > "$SKILLS_REG.tmp" && mv "$SKILLS_REG.tmp" "$SKILLS_REG"
+      lock_skills
 
       info "Skill '$skill_name' onboarded successfully."
       echo -e "  Status: ${YELLOW}probation${RESET}"
@@ -521,9 +528,11 @@ cmd_skills() {
         *) die "Status must be: active, probation, or disabled" ;;
       esac
 
+      unlock_skills
       jq --arg s "$skill_name" --arg st "$new_status" \
         '.[$s].status = $st' "$SKILLS_REG" > "$SKILLS_REG.tmp" \
         && mv "$SKILLS_REG.tmp" "$SKILLS_REG"
+      lock_skills
       info "Set $skill_name → $new_status"
       ;;
 
@@ -539,9 +548,11 @@ cmd_skills() {
       local new_hash
       new_hash=$(sha256sum "$skill_file" 2>/dev/null | cut -d' ' -f1)
 
+      unlock_skills
       jq --arg s "$skill_name" --arg h "$new_hash" \
         '.[$s].hash = $h' "$SKILLS_REG" > "$SKILLS_REG.tmp" \
         && mv "$SKILLS_REG.tmp" "$SKILLS_REG"
+      lock_skills
       info "Rehashed $skill_name: ${new_hash:0:16}..."
       ;;
 
@@ -718,11 +729,11 @@ cmd_help() {
     claw-clips skills set gog-secure active
 
   FILES
-    ~/.openclaw/rules/active.jsonl    Enforced rules (human-owned)
-    ~/.openclaw/rules/pending.jsonl   Agent-proposed rules
-    ~/.openclaw/rules/skills.json     Skill registry
-    ~/.openclaw/safety-audit.log      All exec call history
-    ~/.openclaw/prompts/onboard.md    Onboarding prompt template
+    ~/.openclaw/claw-clips/active.jsonl    Enforced rules (human-owned)
+    ~/.openclaw/claw-clips/pending.jsonl   Agent-proposed rules
+    ~/.openclaw/claw-clips/skills.json     Skill registry
+    ~/.openclaw/claw-clips/safety-audit.log      All exec call history
+    ~/.openclaw/claw-clips/onboard.md    Onboarding prompt template
 
 EOF
 }

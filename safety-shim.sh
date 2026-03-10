@@ -26,20 +26,24 @@ set -uo pipefail
 
 # ── Paths ──────────────────────────────────────────────────────────────
 OC_DIR="${OPENCLAW_DIR:-$HOME/.openclaw}"
-RULES_DIR="$OC_DIR/rules"
-AUDIT="$OC_DIR/safety-audit.log"
+CC_DIR="$OC_DIR/claw-clips"
+RULES_DIR="$CC_DIR"
+AUDIT="$CC_DIR/safety-audit.log"
 ACTIVE_RULES="$RULES_DIR/active.jsonl"
 PENDING_RULES="$RULES_DIR/pending.jsonl"
 SKILLS_REG="$RULES_DIR/skills.json"
 ALLOWLIST="$RULES_DIR/allowlist.jsonl"
-ONBOARD_PROMPT="$OC_DIR/prompts/onboard.md"
+ONBOARD_PROMPT="$CC_DIR/onboard.md"
 
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 CMD="$*"
 
 # ── Bootstrap ──────────────────────────────────────────────────────────
-mkdir -p "$RULES_DIR" "$OC_DIR/prompts" "$(dirname "$AUDIT")"
-[ -f "$SKILLS_REG" ]    || echo '{}' > "$SKILLS_REG"
+mkdir -p "$CC_DIR" "$(dirname "$AUDIT")"
+if [ ! -s "$SKILLS_REG" ]; then
+  chmod 644 "$SKILLS_REG" 2>/dev/null || true
+  echo '{}' > "$SKILLS_REG"
+fi
 [ -f "$ACTIVE_RULES" ]  || touch "$ACTIVE_RULES"
 [ -f "$PENDING_RULES" ] || touch "$PENDING_RULES"
 [ -f "$ALLOWLIST" ]     || touch "$ALLOWLIST"

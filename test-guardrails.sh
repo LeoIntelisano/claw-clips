@@ -26,11 +26,11 @@ HAS_JQ=false; command -v jq > /dev/null 2>&1 && HAS_JQ=true
 
 setup_env() {
   export OPENCLAW_DIR=$(mktemp -d)
-  mkdir -p "$OPENCLAW_DIR/rules" "$OPENCLAW_DIR/prompts"
-  echo '{}' > "$OPENCLAW_DIR/rules/skills.json"
-  touch "$OPENCLAW_DIR/rules/active.jsonl" "$OPENCLAW_DIR/rules/pending.jsonl"
+  mkdir -p "$OPENCLAW_DIR/claw-clips" "$OPENCLAW_DIR/claw-clips"
+  echo '{}' > "$OPENCLAW_DIR/claw-clips/skills.json"
+  touch "$OPENCLAW_DIR/claw-clips/active.jsonl" "$OPENCLAW_DIR/claw-clips/pending.jsonl"
   # Seed allowlist for default-deny model
-  cat > "$OPENCLAW_DIR/rules/allowlist.jsonl" << 'SEED'
+  cat > "$OPENCLAW_DIR/claw-clips/allowlist.jsonl" << 'SEED'
 {"pattern": "^echo ", "type": "regex", "reason": "Basic output"}
 {"pattern": "^ls", "type": "regex", "reason": "Directory listing"}
 {"pattern": "^cat ", "type": "regex", "reason": "File reading"}
@@ -140,10 +140,10 @@ else
 fi
 
 # Audit log
-assert_file_contains "$OPENCLAW_DIR/safety-audit.log" "HARD_DENY_SENSITIVE" "Audit: sensitive logged"
-assert_file_contains "$OPENCLAW_DIR/safety-audit.log" "HARD_DENY_DESTRUCTIVE" "Audit: destructive logged"
+assert_file_contains "$OPENCLAW_DIR/claw-clips/safety-audit.log" "HARD_DENY_SENSITIVE" "Audit: sensitive logged"
+assert_file_contains "$OPENCLAW_DIR/claw-clips/safety-audit.log" "HARD_DENY_DESTRUCTIVE" "Audit: destructive logged"
 if $HAS_JQ; then
-  assert_file_contains "$OPENCLAW_DIR/safety-audit.log" "ALLOWED" "Audit: allowed logged"
+  assert_file_contains "$OPENCLAW_DIR/claw-clips/safety-audit.log" "ALLOWED" "Audit: allowed logged"
 else
   skip "Audit: allowed logged"
 fi
@@ -157,13 +157,13 @@ echo -e "${BOLD}Layer 2: JSONL deny rules${RESET}"
 echo "────────────────────────────────────────────────────"
 if $HAS_JQ; then
   setup_env
-  cat > "$OPENCLAW_DIR/rules/active.jsonl" << 'R'
+  cat > "$OPENCLAW_DIR/claw-clips/active.jsonl" << 'R'
 {"id":"t1","pattern":"batchDelete","type":"contains","skill":"t","severity":"critical","action":"deny","reason":"bulk del"}
 {"id":"t2","pattern":"dangerOp","type":"contains","skill":"t","severity":"high","action":"deny","reason":"high danger"}
 {"id":"t3","pattern":"msg\\.del.*perm","type":"regex","skill":"t","severity":"critical","action":"deny","reason":"regex"}
 {"id":"t4","pattern":"flagOnly","type":"contains","skill":"t","severity":"medium","action":"flag","reason":"flag"}
 R
-  cat > "$OPENCLAW_DIR/rules/pending.jsonl" << 'R'
+  cat > "$OPENCLAW_DIR/claw-clips/pending.jsonl" << 'R'
 {"id":"p1","pattern":"pendCrit","type":"contains","skill":"t","severity":"critical","action":"deny","reason":"pcrit"}
 {"id":"p2","pattern":"pendHigh","type":"contains","skill":"t","severity":"high","action":"deny","reason":"phigh"}
 R
@@ -177,7 +177,7 @@ R
   out=$(run_shim "echo pendHigh x");     assert_exit 0 $? "Pending high: allow (not promoted)"
   out=$(run_shim "echo safeOp list");    assert_exit 0 $? "No match: allow"
 
-  echo "NOTJSON" >> "$OPENCLAW_DIR/rules/active.jsonl"
+  echo "NOTJSON" >> "$OPENCLAW_DIR/claw-clips/active.jsonl"
   out=$(run_shim "echo batchDelete x");  assert_exit 1 $? "Malformed line: rule still works"
   out=$(run_shim "echo safe");           assert_exit 0 $? "Malformed line: safe passes"
 
@@ -196,7 +196,7 @@ if $HAS_JQ; then
   setup_env
 
   # Seed an allowlist with basic infrastructure commands
-  cat > "$OPENCLAW_DIR/rules/allowlist.jsonl" << 'R'
+  cat > "$OPENCLAW_DIR/claw-clips/allowlist.jsonl" << 'R'
 {"pattern": "^echo ", "type": "regex", "reason": "Basic output"}
 {"pattern": "^ls", "type": "regex", "reason": "Directory listing"}
 {"pattern": "^cat [^|]", "type": "regex", "reason": "File reading"}
@@ -226,25 +226,25 @@ R
   out=$(run_shim "python3 /tmp/mystery.py"); assert_exit 1 $? "Allowlist: python3 with script path blocked"
 
   # ── SKILL DETECTION: registered + onboarded ───────────────────────
-  echo '{"myapi":{"detect":["myapi"],"status":"registered"}}' > "$OPENCLAW_DIR/rules/skills.json"
+  echo '{"myapi":{"detect":["myapi"],"status":"registered"}}' > "$OPENCLAW_DIR/claw-clips/skills.json"
   out=$(run_shim "echo myapi do-something"); assert_exit 1 $? "Skill: registered not onboarded → block"
   assert_contains "$out" "not yet onboarded" "  → shows onboard instructions"
 
-  echo '{"myapi":{"detect":["myapi"],"status":"probation","onboarded":"2026-03-10"}}' > "$OPENCLAW_DIR/rules/skills.json"
+  echo '{"myapi":{"detect":["myapi"],"status":"probation","onboarded":"2026-03-10"}}' > "$OPENCLAW_DIR/claw-clips/skills.json"
   out=$(run_shim "echo myapi do-something"); assert_exit 0 $? "Skill: probation → allow"
 
-  echo '{"myapi":{"detect":["myapi"],"status":"active","onboarded":"2026-03-10"}}' > "$OPENCLAW_DIR/rules/skills.json"
+  echo '{"myapi":{"detect":["myapi"],"status":"active","onboarded":"2026-03-10"}}' > "$OPENCLAW_DIR/claw-clips/skills.json"
   out=$(run_shim "echo myapi do-something"); assert_exit 0 $? "Skill: active → allow"
 
-  echo '{"myapi":{"detect":["myapi"],"status":"disabled","onboarded":"2026-03-10"}}' > "$OPENCLAW_DIR/rules/skills.json"
+  echo '{"myapi":{"detect":["myapi"],"status":"disabled","onboarded":"2026-03-10"}}' > "$OPENCLAW_DIR/claw-clips/skills.json"
   out=$(run_shim "echo myapi do-something"); assert_exit 1 $? "Skill: disabled → block"
 
   # ── SKILL DETECTION: python-based skill detected by path ──────────
-  echo '{"searxng":{"detect":["searxng","search.py"],"status":"active","onboarded":"2026-03-10"}}' > "$OPENCLAW_DIR/rules/skills.json"
+  echo '{"searxng":{"detect":["searxng","search.py"],"status":"active","onboarded":"2026-03-10"}}' > "$OPENCLAW_DIR/claw-clips/skills.json"
   out=$(run_shim "echo searxng search.py query"); assert_exit 0 $? "Skill: python script detected by path → allow"
 
   # Same skill but disabled → block
-  echo '{"searxng":{"detect":["searxng","search.py"],"status":"disabled","onboarded":"2026-03-10"}}' > "$OPENCLAW_DIR/rules/skills.json"
+  echo '{"searxng":{"detect":["searxng","search.py"],"status":"disabled","onboarded":"2026-03-10"}}' > "$OPENCLAW_DIR/claw-clips/skills.json"
   out=$(run_shim "echo searxng search.py query"); assert_exit 1 $? "Skill: python script for disabled skill → block"
 
   # ── SKILL HASH VERIFICATION ───────────────────────────────────────
@@ -255,7 +255,7 @@ R
   test_hash=$(sha256sum "$OPENCLAW_DIR/test_skill.md" | cut -d' ' -f1)
 
   # Skill with matching hash → allow
-  cat > "$OPENCLAW_DIR/rules/skills.json" << HJSON
+  cat > "$OPENCLAW_DIR/claw-clips/skills.json" << HJSON
 {"hashtest":{"detect":["hashtest"],"status":"active","onboarded":"2026-03-10","skill_file":"$OPENCLAW_DIR/test_skill.md","hash":"$test_hash"}}
 HJSON
   out=$(run_shim "echo hashtest do-thing"); assert_exit 0 $? "Hash: matching hash → allow"
@@ -269,25 +269,25 @@ HJSON
   assert_contains "$out" "registered" "Hash: mentions re-onboard option"
 
   # Verify it's logged correctly
-  assert_file_contains "$OPENCLAW_DIR/safety-audit.log" "BLOCKED_HASH_CHANGED" "Hash: mismatch logged"
+  assert_file_contains "$OPENCLAW_DIR/claw-clips/safety-audit.log" "BLOCKED_HASH_CHANGED" "Hash: mismatch logged"
 
   # Skill with no hash stored (backward compat) → allow
-  echo '{"nohash":{"detect":["nohash"],"status":"active","onboarded":"2026-03-10"}}' > "$OPENCLAW_DIR/rules/skills.json"
+  echo '{"nohash":{"detect":["nohash"],"status":"active","onboarded":"2026-03-10"}}' > "$OPENCLAW_DIR/claw-clips/skills.json"
   out=$(run_shim "echo nohash do-thing"); assert_exit 0 $? "Hash: no hash stored → allow (backward compat)"
 
   # Skill with hash but file missing → allow (graceful degradation)
-  echo '{"missingfile":{"detect":["missingfile"],"status":"active","onboarded":"2026-03-10","skill_file":"/nonexistent/path.md","hash":"abc123"}}' > "$OPENCLAW_DIR/rules/skills.json"
+  echo '{"missingfile":{"detect":["missingfile"],"status":"active","onboarded":"2026-03-10","skill_file":"/nonexistent/path.md","hash":"abc123"}}' > "$OPENCLAW_DIR/claw-clips/skills.json"
   out=$(run_shim "echo missingfile do-thing"); assert_exit 0 $? "Hash: file missing → allow (graceful)"
 
   # Skill with empty hash field → allow
-  echo '{"emptyhash":{"detect":["emptyhash"],"status":"active","onboarded":"2026-03-10","skill_file":"","hash":""}}' > "$OPENCLAW_DIR/rules/skills.json"
+  echo '{"emptyhash":{"detect":["emptyhash"],"status":"active","onboarded":"2026-03-10","skill_file":"","hash":""}}' > "$OPENCLAW_DIR/claw-clips/skills.json"
   out=$(run_shim "echo emptyhash do-thing"); assert_exit 0 $? "Hash: empty hash field → allow"
 
   # ── AUDIT LOG: verify all actions logged ──────────────────────────
-  assert_file_contains "$OPENCLAW_DIR/safety-audit.log" "BLOCKED_DEFAULT_DENY" "Audit: default deny logged"
-  assert_file_contains "$OPENCLAW_DIR/safety-audit.log" "ALLOWED infra" "Audit: allowlist pass logged"
-  assert_file_contains "$OPENCLAW_DIR/safety-audit.log" "ALLOWED skill=" "Audit: skill pass logged"
-  assert_file_contains "$OPENCLAW_DIR/safety-audit.log" "BLOCKED_HASH_CHANGED" "Audit: hash change logged"
+  assert_file_contains "$OPENCLAW_DIR/claw-clips/safety-audit.log" "BLOCKED_DEFAULT_DENY" "Audit: default deny logged"
+  assert_file_contains "$OPENCLAW_DIR/claw-clips/safety-audit.log" "ALLOWED infra" "Audit: allowlist pass logged"
+  assert_file_contains "$OPENCLAW_DIR/claw-clips/safety-audit.log" "ALLOWED skill=" "Audit: skill pass logged"
+  assert_file_contains "$OPENCLAW_DIR/claw-clips/safety-audit.log" "BLOCKED_HASH_CHANGED" "Audit: hash change logged"
 
   teardown_env
 else
@@ -298,14 +298,14 @@ echo ""
 # ═══════════════════════════════════════════════════════════════════════
 # CLI
 # ═══════════════════════════════════════════════════════════════════════
-echo -e "${BOLD}oc-rules CLI${RESET}"
+echo -e "${BOLD}claw-clips CLI${RESET}"
 echo "────────────────────────────────────────────────────"
 if $HAS_JQ && [ -f "$OC_RULES" ]; then
   setup_env
-  cat > "$OPENCLAW_DIR/rules/active.jsonl" << 'R'
+  cat > "$OPENCLAW_DIR/claw-clips/active.jsonl" << 'R'
 {"id":"a1","pattern":"active.pat","type":"contains","skill":"s","severity":"critical","action":"deny","reason":"a","added":"2026-03-10","author":"human","reviewed":true}
 R
-  cat > "$OPENCLAW_DIR/rules/pending.jsonl" << 'R'
+  cat > "$OPENCLAW_DIR/claw-clips/pending.jsonl" << 'R'
 {"id":"p1","pattern":"pend.pat","type":"contains","skill":"s","severity":"high","action":"deny","reason":"p","added":"2026-03-10","author":"agent","reviewed":false}
 {"id":"p2","pattern":"pend.crit","type":"contains","skill":"s","severity":"critical","action":"deny","reason":"pc","added":"2026-03-10","author":"agent","reviewed":false}
 R
@@ -320,14 +320,14 @@ R
   assert_not_contains "$out" "p1" "CLI: --active hides pending"
 
   /usr/bin/bash "$OC_RULES" promote p1 > /dev/null 2>&1
-  assert_file_contains "$OPENCLAW_DIR/rules/active.jsonl" "p1" "CLI: promote → active"
+  assert_file_contains "$OPENCLAW_DIR/claw-clips/active.jsonl" "p1" "CLI: promote → active"
 
   /usr/bin/bash "$OC_RULES" demote a1 > /dev/null 2>&1
-  assert_file_contains "$OPENCLAW_DIR/rules/pending.jsonl" "a1" "CLI: demote → pending"
+  assert_file_contains "$OPENCLAW_DIR/claw-clips/pending.jsonl" "a1" "CLI: demote → pending"
 
   /usr/bin/bash "$OC_RULES" delete p2 > /dev/null 2>&1
   ((TOTAL++))
-  if ! grep -q "p2" "$OPENCLAW_DIR/rules/"*.jsonl 2>/dev/null; then
+  if ! grep -q "p2" "$OPENCLAW_DIR/claw-clips/"*.jsonl 2>/dev/null; then
     echo -e "  ${GREEN}PASS${RESET}  CLI: delete removes rule"; ((PASSED++))
   else echo -e "  ${RED}FAIL${RESET}  CLI: delete failed"; ((FAILED++)); fi
 
@@ -335,8 +335,8 @@ R
   out=$(/usr/bin/bash "$OC_RULES" bloat 2>&1);       assert_exit 0 $? "CLI: bloat"
 
   # Dry-run test — unlock active.jsonl first
-  chmod 644 "$OPENCLAW_DIR/rules/active.jsonl" 2>/dev/null
-  cat > "$OPENCLAW_DIR/rules/active.jsonl" << 'R'
+  chmod 644 "$OPENCLAW_DIR/claw-clips/active.jsonl" 2>/dev/null
+  cat > "$OPENCLAW_DIR/claw-clips/active.jsonl" << 'R'
 {"id":"dt1","pattern":"batchDelete","type":"contains","skill":"t","severity":"critical","action":"deny","reason":"x"}
 R
 
@@ -348,27 +348,27 @@ R
   assert_contains "$out" "WOULD ALLOW" "CLI: test → would-allow"
 
   # Skills workflow — reset permissions
-  chmod 644 "$OPENCLAW_DIR/rules/active.jsonl" 2>/dev/null
-  chmod 644 "$OPENCLAW_DIR/rules/skills.json" 2>/dev/null
-  echo '{}' > "$OPENCLAW_DIR/rules/skills.json"
+  chmod 644 "$OPENCLAW_DIR/claw-clips/active.jsonl" 2>/dev/null
+  chmod 644 "$OPENCLAW_DIR/claw-clips/skills.json" 2>/dev/null
+  echo '{}' > "$OPENCLAW_DIR/claw-clips/skills.json"
 
   /usr/bin/bash "$OC_RULES" skills add ts --detect "tsapi,ts.call" --capabilities "r,w" > /dev/null 2>&1
 
   ((TOTAL++))
-  st=$(jq -r '.ts.status' "$OPENCLAW_DIR/rules/skills.json")
+  st=$(jq -r '.ts.status' "$OPENCLAW_DIR/claw-clips/skills.json")
   [ "$st" = "registered" ] && { echo -e "  ${GREEN}PASS${RESET}  CLI: skills add"; ((PASSED++)); } \
                             || { echo -e "  ${RED}FAIL${RESET}  CLI: skills add ($st)"; ((FAILED++)); }
 
   /usr/bin/bash "$OC_RULES" skills onboard ts > /dev/null 2>&1
 
   ((TOTAL++))
-  st=$(jq -r '.ts.status' "$OPENCLAW_DIR/rules/skills.json")
+  st=$(jq -r '.ts.status' "$OPENCLAW_DIR/claw-clips/skills.json")
   [ "$st" = "probation" ] && { echo -e "  ${GREEN}PASS${RESET}  CLI: skills onboard → probation"; ((PASSED++)); } \
                            || { echo -e "  ${RED}FAIL${RESET}  CLI: skills onboard ($st)"; ((FAILED++)); }
 
   /usr/bin/bash "$OC_RULES" skills set ts active > /dev/null 2>&1
   ((TOTAL++))
-  st=$(jq -r '.ts.status' "$OPENCLAW_DIR/rules/skills.json")
+  st=$(jq -r '.ts.status' "$OPENCLAW_DIR/claw-clips/skills.json")
   [ "$st" = "active" ] && { echo -e "  ${GREEN}PASS${RESET}  CLI: skills set → active"; ((PASSED++)); } \
                         || { echo -e "  ${RED}FAIL${RESET}  CLI: skills set ($st)"; ((FAILED++)); }
 

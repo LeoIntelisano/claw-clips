@@ -67,15 +67,14 @@ bash install-guardrails.sh
 ├── bash                              Safety shim (755)
 └── claw-clips                        CLI manager (755)
 
-~/.openclaw/
-├── rules/
-│   ├── active.jsonl                  Enforced rules (444, read-only)
-│   ├── pending.jsonl                 Agent proposals (644)
-│   ├── skills.json                   Skill registry (644)
-│   └── allowlist.jsonl               Infrastructure commands (444, read-only)
-├── prompts/
-│   └── onboard.md                    Onboarding prompt template
-└── safety-audit.log                  Full exec audit trail
+~/.openclaw/claw-clips/
+├── active.jsonl                      Enforced rules (444, read-only)
+├── pending.jsonl                     Agent proposals (644)
+├── skills.json                       Skill registry (444, read-only)
+├── allowlist.jsonl                   Infrastructure commands (444, read-only)
+├── onboard.md                        Onboarding prompt template (644)
+├── safety-audit.log                  Full exec audit trail (644)
+└── README.md                         Documentation
 ```
 
 ### Service Configuration
@@ -120,7 +119,7 @@ Tell the agent:
 
 > "Try using the searxng skill."
 
-The shim blocks with onboarding instructions. The agent reads the prompt at `~/.openclaw/prompts/onboard.md`, analyzes the skill's API surface, generates deny rules, appends them to `pending.jsonl`, and runs `claw-clips skills onboard searxng`.
+The shim blocks with onboarding instructions. The agent reads the prompt at `~/.openclaw/claw-clips/onboard.md`, analyzes the skill's API surface, generates deny rules, appends them to `pending.jsonl`, and runs `claw-clips skills onboard searxng`.
 
 The skill enters **probation** — only critical deny rules are enforced.
 
@@ -141,7 +140,7 @@ claw-clips skills set searxng active
 
 ```bash
 # Live audit log
-tail -f ~/.openclaw/safety-audit.log
+tail -f ~/.openclaw/claw-clips/safety-audit.log
 
 # Recent entries
 claw-clips tail 20
@@ -224,8 +223,8 @@ Add to your agent's persistent memory (~130 tokens):
 All exec commands go through a safety shim at ~/bin/bash.
 If a skill hasn't been onboarded, the shim blocks and tells you what to do.
 Follow its instructions exactly.
-You can propose deny rules by appending JSONL to ~/.openclaw/rules/pending.jsonl
-You can read the onboarding template at ~/.openclaw/prompts/onboard.md
+You can propose deny rules by appending JSONL to ~/.openclaw/claw-clips/pending.jsonl
+You can read the onboarding template at ~/.openclaw/claw-clips/onboard.md
 You CANNOT modify active.jsonl, the allowlist, or promote/activate/rehash skills.
 After onboarding to probation, stop and let the operator review.
 If a skill is blocked due to a hash change, present BOTH options (rehash vs

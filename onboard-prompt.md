@@ -76,5 +76,8 @@ The skill enters probation. The human operator will review your proposed
 rules and activate the skill. Do NOT run `claw-clips skills set` or
 `claw-clips promote` — these are operator-only commands.
 
+Tell the operator to run: `claw-clips list --pending` to review proposed rules.
+Tell them to run: `claw-clips promote <rule_id|--all> [--skill NAME]` to approve rules.
+
 If this is a re-onboarding (skill definition changed), focus on what's NEW
 in the skill definition compared to the existing deny rules.

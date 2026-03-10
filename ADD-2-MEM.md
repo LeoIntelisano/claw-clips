@@ -5,11 +5,11 @@
   and tell you what to do. Follow the shim's instructions exactly.
 
   You can propose new deny rules by appending JSONL to:
-    ~/.openclaw/rules/pending.jsonl
+    ~/.openclaw/claw-clips/pending.jsonl
   You can read the onboarding template at:
-    ~/.openclaw/prompts/onboard.md
+    ~/.openclaw/claw-clips/onboard.md
   You can read the audit log at:
-    ~/.openclaw/safety-audit.log
+    ~/.openclaw/claw-clips/safety-audit.log
 
-  You CANNOT modify ~/.openclaw/rules/active.jsonl — it is read-only.
+  You CANNOT modify ~/.openclaw/claw-clips/active.jsonl — it is read-only.
   Only the human operator can promote, demote, or delete rules.
