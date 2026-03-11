@@ -283,6 +283,10 @@ R
   # ── DEFAULT DENY: unknown commands blocked ────────────────────────
   out=$(run_shim "somebinary --do-stuff"); assert_exit 1 $? "Default deny: unknown command blocked"
   assert_contains "$out" "BLOCKED" "  → shows blocked message"
+  assert_contains "$out" "ASK THE OPERATOR" "  → tells agent to ask operator"
+  assert_contains "$out" "Do NOT attempt" "  → tells agent not to self-register"
+  assert_contains "$out" "SKILL.md" "  → mentions skill file"
+  assert_contains "$out" "calling pattern" "  → mentions calling pattern"
 
   out=$(run_shim "python3 /some/random/script.py"); assert_exit 1 $? "Default deny: unknown python script blocked"
 

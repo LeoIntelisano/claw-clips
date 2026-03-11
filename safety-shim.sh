@@ -346,9 +346,23 @@ else
 [safety] BLOCKED: Command not recognized as a registered skill or
 [safety] allowed infrastructure command.
 [safety]
-[safety] If this is a new tool/skill:
-[safety]   claw-clips skills add <name> --detect "pattern1,pattern2"
-[safety]   Then complete the onboarding process.
+[safety] If this is a new tool/skill, ASK THE OPERATOR to register it.
+[safety] To help them, gather the following information:
+[safety]
+[safety]   1. Look for skill definitions in:
+[safety]        ~/.openclaw/skills/
+[safety]        ~/.openclaw/workspace/skills/
+[safety]   2. Read the skill's SKILL.md to identify:
+[safety]        - The calling pattern (how the tool is invoked)
+[safety]        - Its capabilities (email, calendar, drive, search, etc.)
+[safety]        - The path to the SKILL.md file itself
+[safety]   3. Present this to the operator so they can run:
+[safety]        claw-clips skills add <name> \
+[safety]          --detect "calling_pattern" \
+[safety]          --capabilities "cap1,cap2" \
+[safety]          --skill-file /path/to/SKILL.md
+[safety]
+[safety] Do NOT attempt to register the skill yourself.
 [safety]
 [safety] If this is a safe infrastructure command:
 [safety]   Ask the operator to add it to the allowlist.

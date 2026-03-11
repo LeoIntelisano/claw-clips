@@ -8,6 +8,12 @@ generate deny rules that will be enforced by a safety shim.
 ## API Surface:
 {{SKILL_DESCRIPTION}}
 
+## Skill Lifecycle
+
+   1. registered → skill detected, commands blocked
+   2. onboarded → rules generated, enters probation (critical rules enforced)
+   3. active → all rules enforced (critical + high)
+
 ## Classification Guide
 
 For each endpoint, action, or capability in this skill, classify as:
@@ -65,16 +71,23 @@ Required fields:
 5. Aim for 8-20 rules per skill. Fewer if it's read-heavy.
 6. Self-check: would a normal single-item GET match this? If yes, narrow it.
 
+
+## Detection Patterns For claw clips add
+   - Use SIMPLE SUBSTRINGS only (no regex)
+   - Examples: "gog ", "searxng", "aws ec2 delete"
+   - The shim checks: if [[ "$CMD" == *"$pattern"* ]]
+
 ## Output
 
 ONLY the JSONL rules, one per line. Nothing else.
 
 ## Important
+### The procedure
+1. Listen to the shim, provide feedback to the user
+2. If not added shim will tell how to construct add command (the human runs this)
+3. AFTER the skill is registered, generate rules. After generating rules, STOP.
+4. The human operator is responsible for: `claw-clips skills onboard`, `claw-clips skills set`, `claw-clips promote`
 
-After generating rules and running `claw-clips skills onboard`, STOP.
-The skill enters probation. The human operator will review your proposed
-rules and activate the skill. Do NOT run `claw-clips skills set` or
-`claw-clips promote` — these are operator-only commands.
 
 Tell the operator to run: `claw-clips list --pending` to review proposed rules.
 Tell them to run: `claw-clips promote <rule_id|--all> [--skill NAME]` to approve rules.
