@@ -142,6 +142,12 @@ check_jsonl_rules() {
     reason=$(echo "$rule"   | jq -r '.reason   // "no reason given"' 2>/dev/null)
     rule_id=$(echo "$rule"  | jq -r '.id       // "unknown"' 2>/dev/null)
 
+    if [ "$action" = "flag" ]; then
+     # Log but don't block
+     log "FLAGGED_RULE source=$source_label id=$rule_id sev=$severity reason=$reason"
+     continue
+    fi
+
     [ "$action" = "deny" ] || continue
     [ -n "$pattern" ]      || continue
 
