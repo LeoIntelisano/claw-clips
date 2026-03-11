@@ -24,26 +24,27 @@ Agent calls exec
   ├─ Layer 1: Hard-coded patterns (zero deps)
   │   Blocks .ssh, .env, rm -rf, curl|bash, etc.
   │
-  ├─ Layer 2: JSONL deny rules
+  ├─ Layer 2: JSONL deny rules (scoped to _meta + detected skill)
   │   active.jsonl  → critical + high enforced
   │   pending.jsonl → critical only (agent proposals)
+  │   flag rules    → logged without blocking (any source)
   │
-  ├─ Layer 3: Default-deny
-  │   ├─ Matches registered skill? → check status
-  │   │   ├─ active/probation → allow (rules already checked)
-  │   │   ├─ hash changed → block (re-onboard required)
-  │   │   ├─ disabled → block
-  │   │   └─ registered → block (onboard first)
-  │   │
-  │   ├─ Matches infrastructure allowlist? → allow
-  │   │   (echo, ls, cat, python3 -c, jq, etc.)
-  │   │
-  │   └─ Nothing matches → BLOCK
-  │
-  └─ All checks pass → exec /bin/bash
+  └─ Layer 3: Default-deny
+      ├─ Matches registered skill? → check status
+      │   ├─ active/probation → allow (rules already checked)
+      │   ├─ hash changed → block (re-onboard required)
+      │   ├─ disabled → block
+      │   └─ registered → block (onboard first)
+      │
+      ├─ Matches infrastructure allowlist? → allow
+      │   (echo, ls, cat, python3 -c, jq, claw-clips, etc.)
+      │
+      └─ Nothing matches → BLOCK
 ```
 
 The shim is named `bash` and placed in `~/bin/` so the agent's service resolves it via PATH. Interactive shells are unaffected — they use their own PATH.
+
+Layer 2 rule evaluation is **scoped**: only `_meta` rules and rules belonging to the detected skill are checked. If no skill is detected, only `_meta` rules apply (infrastructure commands are covered by Layer 1 and the allowlist).
 
 ## Installation
 
@@ -119,7 +120,11 @@ Tell the agent:
 
 > "Try using the searxng skill."
 
-The shim blocks with onboarding instructions. The agent reads the prompt at `~/.openclaw/claw-clips/onboard.md`, analyzes the skill's API surface, generates deny rules, appends them to `pending.jsonl`, and runs `claw-clips skills onboard searxng`.
+The shim blocks with onboarding instructions. The agent reads the prompt at `~/.openclaw/claw-clips/onboard.md`, analyzes the skill's API surface, and writes deny rules to `pending.jsonl`. The agent then stops — the operator reviews and runs:
+
+```bash
+claw-clips skills onboard searxng
+```
 
 The skill enters **probation** — only critical deny rules are enforced.
 
@@ -163,8 +168,14 @@ claw-clips skills add gog-secure \
 Tell the agent to onboard. It will analyze the API surface and propose rules like:
 
 ```jsonl
-{"id": "gog_001", "pattern": "gog gmail send", "type": "contains", "skill": "gog-secure", "severity": "critical", "action": "deny", "reason": "Sending email is irreversible — wrong recipient means permanent mistake"}
-{"id": "gog_002", "pattern": "gog drive delete", "type": "contains", "skill": "gog-secure", "severity": "critical", "action": "deny", "reason": "Permanent drive file deletion is irreversible"}
+{"id": "gog_001", "pattern": "gog gmail send", "type": "contains", "skill": "gog-secure", "severity": "critical", "action": "deny", "reason": "Sending email is irreversible — wrong recipient means permanent mistake", "added": "2026-03-10", "author": "agent", "reviewed": false}
+{"id": "gog_002", "pattern": "gog drive delete", "type": "contains", "skill": "gog-secure", "severity": "critical", "action": "deny", "reason": "Permanent drive file deletion is irreversible", "added": "2026-03-10", "author": "agent", "reviewed": false}
+```
+
+Uncertain actions get flagged rather than blocked:
+
+```jsonl
+{"id": "gog_003", "pattern": "gog calendar delete", "type": "contains", "skill": "gog-secure", "severity": "high", "action": "flag", "reason": "Deleting events could be destructive depending on scope — log for review", "added": "2026-03-10", "author": "agent", "reviewed": false}
 ```
 
 Review, promote, and activate as above. You can also seed your own rules before the agent onboards — any rules in `active.jsonl` take precedence.
@@ -203,7 +214,7 @@ It's good practice to run `claw-clips skills check` after updating any skill fil
 The seed `active.jsonl` includes rules that block the agent from modifying the safety system:
 
 | Rule | What It Blocks |
-|------|---------------|
+|------|----------------|
 | `meta_001` | `claw-clips skills set` — agent can't activate skills |
 | `meta_002` | `claw-clips promote` — agent can't promote rules |
 | `meta_003` | `claw-clips delete` — agent can't delete rules |
@@ -211,8 +222,10 @@ The seed `active.jsonl` includes rules that block the agent from modifying the s
 | `meta_005` | `claw-clips demote` — agent can't demote rules |
 | `meta_006` | `claw-clips edit` — agent can't edit rules |
 | `meta_007` | `claw-clips skills rehash` — agent can't rehash skills |
+| `meta_008` | `claw-clips skills add` — agent can't register new skills |
+| `meta_009` | `claw-clips skills onboard` — agent can't onboard skills |
 
-The agent CAN: `claw-clips skills onboard` (probation), append to `pending.jsonl`, and read with `claw-clips list/stats/tail/test`.
+The agent CAN: write to `pending.jsonl` and read with `claw-clips list/stats/tail/test`.
 
 ## Agent Memory Entry
 
@@ -223,10 +236,10 @@ Add to your agent's persistent memory (~130 tokens):
 All exec commands go through a safety shim at ~/bin/bash.
 If a skill hasn't been onboarded, the shim blocks and tells you what to do.
 Follow its instructions exactly.
-You can propose deny rules by appending JSONL to ~/.openclaw/claw-clips/pending.jsonl
+You can propose deny-rules or flag-rules by writing JSONL to ~/.openclaw/claw-clips/pending.jsonl
 You can read the onboarding template at ~/.openclaw/claw-clips/onboard.md
-You CANNOT modify active.jsonl, the allowlist, or promote/activate/rehash skills.
-After onboarding to probation, stop and let the operator review.
+You CANNOT modify active.jsonl, the allowlist, or promote/activate/rehash/register/onboard skills.
+After generating rules, STOP and let the operator review and onboard.
 If a skill is blocked due to a hash change, present BOTH options (rehash vs
 re-onboard) to the user and wait for their decision. Do not act on your own.
 Run `claw-clips skills check` at the start of each new session to verify
@@ -273,17 +286,19 @@ TESTING & AUDIT
 | Field | Values |
 |-------|--------|
 | `type` | `contains`, `regex`, `exact` |
-| `severity` | `critical`, `high`, `medium`, `low` |
-| `action` | `deny` (block), `flag` (log only) |
+| `severity` | `critical`, `high` |
+| `action` | `deny` (block execution), `flag` (log only) |
 | `author` | `agent`, `human` |
+| `reviewed` | `true` (human-reviewed), `false` (agent-proposed) |
 
 ### Severity Enforcement
 
 | Severity | active.jsonl | pending.jsonl |
-|----------|-------------|--------------|
+|----------|--------------|---------------|
 | critical | **DENY** | **DENY** |
 | high | **DENY** | flag only |
-| medium | flag only | flag only |
+
+`flag` rules always log without blocking, regardless of source or severity.
 
 ## Test Suite
 
@@ -296,9 +311,10 @@ Tests all three layers, the CLI, skill detection, allowlist matching, and defaul
 ## Security Notes
 
 - **Default-deny model**: unknown commands are blocked, not allowed
+- **Scoped rule evaluation**: Layer 2 only checks `_meta` rules and rules for the detected skill — rules from other skills don't fire on unrelated commands
 - **The shim is a guardrail, not a sandbox**: it pattern-matches command strings. A deliberately evasive agent could craft bypass commands (e.g., `python3 -c "subprocess.run(...)"`)
 - **`active.jsonl` and `allowlist.jsonl` are chmod 444**: the agent has no code path to modify them
-- **Meta rules block agent self-promotion**: the agent can propose but not approve
+- **Meta rules block agent self-promotion**: the agent can propose but not approve, activate, register, or rehash
 - **Skill hash tracking**: detects when tool definitions change after onboarding
 - **All exec calls are audited**: every allow, deny, and passthrough is logged with timestamp
 
