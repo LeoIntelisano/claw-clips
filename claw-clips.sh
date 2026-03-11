@@ -495,12 +495,17 @@ cmd_skills() {
       exists=$(jq -r --arg s "$skill_name" 'has($s)' "$SKILLS_REG")
       [ "$exists" = "true" ] || die "Skill '$skill_name' not found. Register first: claw-clips skills add ..."
 
-      # Count pending rules for this skill
+      # Count pending & active rules for this skill
       local rule_count=0
-      if [ -s "$PENDING" ]; then
-        rule_count=$(jq -r --arg s "$skill_name" \
-          'select(.skill == $s) | .id' "$PENDING" 2>/dev/null | wc -l)
-      fi
+      for f in "$ACTIVE" "$PENDING"; do
+        [ -s "$f" ] || continue
+        while IFS= read -r line; do
+          [ -z "$line" ] && continue
+          local line_skill
+          line_skill=$(echo "$line" | jq -r '.skill // ""' 2>/dev/null)
+          [ "$line_skill" = "$skill_name" ] && ((rule_count++)) || true
+        done < "$f"
+      done
 
       local ts
       ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
