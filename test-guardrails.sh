@@ -65,6 +65,11 @@ assert_file_contains() {
   if grep -q "$needle" "$f" 2>/dev/null; then echo -e "  ${GREEN}PASS${RESET}  $label"; ((PASSED++))
   else echo -e "  ${RED}FAIL${RESET}  $label"; ((FAILED++)); fi
 }
+assert_file_not_contains() {
+  local f="$1" needle="$2" label="$3"; ((TOTAL++))
+  if grep -q "$needle" "$f" 2>/dev/null; then echo -e "  ${RED}FAIL${RESET}  $label (unwanted: $needle)"; ((FAILED++))
+  else echo -e "  ${GREEN}PASS${RESET}  $label"; ((PASSED++)); fi
+}
 skip() { ((TOTAL++)); ((SKIPPED++)); echo -e "  ${YELLOW}SKIP${RESET}  $1 (requires jq)"; }
 
 run_shim() { /usr/bin/bash "$SHIM" -c "$*" 2>&1; }
@@ -157,6 +162,11 @@ echo -e "${BOLD}Layer 2: JSONL deny rules${RESET}"
 echo "────────────────────────────────────────────────────"
 if $HAS_JQ; then
   setup_env
+
+  # Register skill "t" so the shim detects it and scopes rules to it
+  echo '{"t":{"detect":["batchdelete","dangerop","msg.del","flagonly","pendcrit","pendhigh","safeop"],"status":"active","onboarded":"2026-03-10"}}' \
+    > "$OPENCLAW_DIR/claw-clips/skills.json"
+
   cat > "$OPENCLAW_DIR/claw-clips/active.jsonl" << 'R'
 {"id":"t1","pattern":"batchDelete","type":"contains","skill":"t","severity":"critical","action":"deny","reason":"bulk del"}
 {"id":"t2","pattern":"dangerOp","type":"contains","skill":"t","severity":"high","action":"deny","reason":"high danger"}
@@ -179,11 +189,77 @@ R
 
   echo "NOTJSON" >> "$OPENCLAW_DIR/claw-clips/active.jsonl"
   out=$(run_shim "echo batchDelete x");  assert_exit 1 $? "Malformed line: rule still works"
-  out=$(run_shim "echo safe");           assert_exit 0 $? "Malformed line: safe passes"
+  out=$(run_shim "echo safeOp ok");      assert_exit 0 $? "Malformed line: safe passes"
 
   teardown_env
 else
   for t in "Active crit" "Active high" "Regex" "Flag" "Pending crit" "Pending high" "No match" "Malformed"; do skip "L2: $t"; done
+fi
+echo ""
+
+# ═══════════════════════════════════════════════════════════════════════
+# LAYER 2.5: Rule scoping (skill isolation)
+# ═══════════════════════════════════════════════════════════════════════
+echo -e "${BOLD}Layer 2.5: Rule scoping — skill isolation${RESET}"
+echo "────────────────────────────────────────────────────"
+if $HAS_JQ; then
+  setup_env
+
+  # Two skills registered: "alpha" and "beta"
+  cat > "$OPENCLAW_DIR/claw-clips/skills.json" << 'SKILLS'
+{
+  "alpha": {"detect":["alphatool"],"status":"active","onboarded":"2026-03-10"},
+  "beta":  {"detect":["betatool"],"status":"active","onboarded":"2026-03-10"}
+}
+SKILLS
+
+  # Rules: alpha has a deny, beta has a deny, _meta has a deny
+  cat > "$OPENCLAW_DIR/claw-clips/active.jsonl" << 'R'
+{"id":"a_deny","pattern":"alpha-danger","type":"contains","skill":"alpha","severity":"critical","action":"deny","reason":"alpha specific"}
+{"id":"b_deny","pattern":"beta-danger","type":"contains","skill":"beta","severity":"critical","action":"deny","reason":"beta specific"}
+{"id":"b_flag","pattern":"beta-watch","type":"contains","skill":"beta","severity":"high","action":"flag","reason":"beta flag"}
+{"id":"m_deny","pattern":"claw-clips skills add","type":"contains","skill":"_meta","severity":"critical","action":"deny","reason":"block skill registration"}
+R
+
+  # Alpha command hits alpha rule → blocked
+  out=$(run_shim "echo alphatool alpha-danger"); assert_exit 1 $? "Scope: alpha cmd + alpha rule → block"
+  assert_contains "$out" "a_deny" "  → correct rule ID"
+
+  # Alpha command does NOT hit beta rule
+  out=$(run_shim "echo alphatool beta-danger"); assert_exit 0 $? "Scope: alpha cmd + beta rule → allow (wrong skill)"
+
+  # Beta command hits beta rule → blocked
+  out=$(run_shim "echo betatool beta-danger"); assert_exit 1 $? "Scope: beta cmd + beta rule → block"
+
+  # Beta command does NOT hit alpha rule
+  out=$(run_shim "echo betatool alpha-danger"); assert_exit 0 $? "Scope: beta cmd + alpha rule → allow (wrong skill)"
+
+  # Meta rules apply to ALL commands — test with alpha skill command
+  out=$(run_shim "echo alphatool claw-clips skills add newskill"); assert_exit 1 $? "Scope: meta rule blocks through skill cmd"
+  assert_contains "$out" "m_deny" "  → meta rule ID"
+
+  # Meta rules apply to infra commands too
+  out=$(run_shim "echo claw-clips skills add newskill"); assert_exit 1 $? "Scope: meta rule blocks through infra cmd"
+
+  # Infra command does NOT trigger skill-specific rules
+  out=$(run_shim "echo alpha-danger"); assert_exit 0 $? "Scope: infra cmd ignores alpha deny rule"
+  out=$(run_shim "echo beta-danger"); assert_exit 0 $? "Scope: infra cmd ignores beta deny rule"
+
+  # Flag rules are also scoped — beta flag should not fire for alpha commands
+  out=$(run_shim "echo alphatool beta-watch something")
+  assert_file_not_contains "$OPENCLAW_DIR/claw-clips/safety-audit.log" "FLAGGED.*b_flag.*alphatool beta-watch" \
+    "Scope: beta flag rule does not fire for alpha cmd"
+
+  # But beta flag should fire for beta commands
+  out=$(run_shim "echo betatool beta-watch something")
+  assert_file_contains "$OPENCLAW_DIR/claw-clips/safety-audit.log" "b_flag" \
+    "Scope: beta flag rule fires for beta cmd"
+
+  teardown_env
+else
+  for t in "alpha+alpha" "alpha+beta" "beta+beta" "beta+alpha" "meta+skill" "meta+infra" "infra isolation" "flag scoping"; do
+    skip "Scope: $t"
+  done
 fi
 echo ""
 
@@ -251,7 +327,6 @@ R
 
   # Create a fake skill file to hash
   echo "version 1 of skill" > "$OPENCLAW_DIR/test_skill.md"
-  local test_hash
   test_hash=$(sha256sum "$OPENCLAW_DIR/test_skill.md" | cut -d' ' -f1)
 
   # Skill with matching hash → allow

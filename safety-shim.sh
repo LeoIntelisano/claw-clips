@@ -125,6 +125,7 @@ check_jsonl_rules() {
   local rules_file="$1"
   local source_label="$2"
   local min_severity="$3"
+  local skill_filter="${4:-}"    # if set, only evaluate _meta + this skill's rules
 
   [ -f "$rules_file" ] || return 0
   [ -s "$rules_file" ] || return 0
@@ -134,13 +135,19 @@ check_jsonl_rules() {
     [ -z "$rule" ] && continue
     [[ "$rule" == \#* ]] && continue
 
-    local action severity pattern ptype reason rule_id
+    local action severity pattern ptype reason rule_id rule_skill
     action=$(echo "$rule"   | jq -r '.action   // empty' 2>/dev/null) || continue
     severity=$(echo "$rule" | jq -r '.severity // empty' 2>/dev/null) || continue
     pattern=$(echo "$rule"  | jq -r '.pattern  // empty' 2>/dev/null) || continue
     ptype=$(echo "$rule"    | jq -r '.type     // "contains"' 2>/dev/null)
     reason=$(echo "$rule"   | jq -r '.reason   // "no reason given"' 2>/dev/null)
     rule_id=$(echo "$rule"  | jq -r '.id       // "unknown"' 2>/dev/null)
+    rule_skill=$(echo "$rule" | jq -r '.skill  // ""' 2>/dev/null)
+
+    # Scope: if a skill filter is set, only check _meta rules and rules for that skill
+    if [ -n "$skill_filter" ] && [ "$rule_skill" != "_meta" ] && [ "$rule_skill" != "$skill_filter" ]; then
+      continue
+    fi
 
     if [ "$action" = "flag" ]; then
      # Log but don't block
@@ -173,11 +180,8 @@ check_jsonl_rules() {
   done < "$rules_file"
 }
 
-check_jsonl_rules "$ACTIVE_RULES"  "active"  "high"
-check_jsonl_rules "$PENDING_RULES" "pending" "critical"
-
 # ═══════════════════════════════════════════════════════════════════════
-# LAYER 3: Default-deny with skill gate + infrastructure allowlist
+# SKILL DETECTION (run early so Layer 2 can scope rules by skill)
 # ═══════════════════════════════════════════════════════════════════════
 
 detect_skill() {
@@ -202,6 +206,24 @@ detect_skill() {
     done
   done
 }
+
+# Detect skill early so we can scope Layer 2 rules
+DETECTED=$(detect_skill)
+
+# ═══════════════════════════════════════════════════════════════════════
+# LAYER 2: JSONL deny rules (scoped to _meta + detected skill)
+# ═══════════════════════════════════════════════════════════════════════
+
+# If no skill detected, only _meta rules apply (Layer 1 already covers
+# hard-coded sensitive/destructive patterns for infra commands).
+RULE_SCOPE="${DETECTED:-_meta}"
+
+check_jsonl_rules "$ACTIVE_RULES"  "active"  "high"    "$RULE_SCOPE"
+check_jsonl_rules "$PENDING_RULES" "pending" "critical" "$RULE_SCOPE"
+
+# ═══════════════════════════════════════════════════════════════════════
+# LAYER 3: Default-deny with skill gate + infrastructure allowlist
+# ═══════════════════════════════════════════════════════════════════════
 
 check_allowlist() {
   [ -f "$ALLOWLIST" ] || return 1
@@ -256,8 +278,6 @@ check_skill_hash() {
 
   [ "$stored_hash" = "$current_hash" ]
 }
-
-DETECTED=$(detect_skill)
 
 if [ -n "$DETECTED" ]; then
   skill_status=$(jq -r --arg s "$DETECTED" \
